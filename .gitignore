@@ -1,0 +1,52 @@
+# ========================================
+# Streamlit Cloud Deployment .gitignore
+# ========================================
+
+# 🔐 CRITICAL: Never commit secrets!
+.env
+.streamlit/secrets.toml
+
+# 📦 Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 🗄️ Database files (cache will be recreated)
+*.db
+*.sqlite
+*.sqlite3
+pubmed_cache.db
+
+# 🐳 Docker (local development only)
+docker-compose.yml
+Dockerfile
+.docker/
+
+# 🔧 Local development scripts
+run_app.bat
+run_app.sh
+*.local.py
+
+# 📁 OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 💡 IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 📊 Temporary files
+*.log
+*.tmp
+temp/
+tmp/
+
+# 📦 Distribution / Build
+build/
+dist/
+*.egg-info/
