@@ -13,8 +13,9 @@ class TrendAnalysisResult(BaseModel):
     hypotheses: List[Hypothesis] = Field(description="3 specific research proposals")
 
 class TrendAnalyzer:
-    def __init__(self, model_name: str): 
+    def __init__(self, model_name: str, ollama_client=None): 
         self.model_name = model_name
+        self.client = ollama_client  # Use provided client or default to ollama module
 
     def analyze_and_hypothesize(self, abstracts: List[dict], topic: str) -> TrendAnalysisResult:
         if not abstracts:
@@ -71,7 +72,11 @@ class TrendAnalyzer:
         
         try:
             print(f"DEBUG: Sending request to Ollama ({self.model_name})...")
-            response = ollama.chat(
+            
+            # Use provided client or fallback to ollama module
+            chat_func = self.client.chat if self.client else ollama.chat
+            
+            response = chat_func(
                 model=self.model_name,
                 messages=[{'role': 'user', 'content': prompt}],
                 format='json', 
