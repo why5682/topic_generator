@@ -2,11 +2,16 @@ import os
 import re
 import argparse
 from datetime import datetime
-from dotenv import load_dotenv
+
+# Optional dotenv for local development (not needed in Streamlit Cloud)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # Running in cloud environment without python-dotenv
+
 from pubmed_client import PubMedClient
 from analyzer import TrendAnalyzer
-
-load_dotenv()
 
 def sanitize_topic(topic: str) -> str:
     return re.sub(r'[^a-zA-Z0-9_\-]', '', topic.replace(" ", "_"))
