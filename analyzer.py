@@ -54,7 +54,7 @@ class TrendAnalysisResult(BaseModel):
     """Complete TTE-based trend analysis result"""
     landscape_summary: str = Field(description="Overview of current research landscape")
     identified_gaps: List[IdentifiedGap] = Field(description="List of feasible evidence gaps")
-    hypotheses: List[Hypothesis] = Field(description="3 TTE-based research proposals")
+    hypotheses: List[Hypothesis] = Field(description="TTE-based research proposals")
 
 
 class TrendAnalyzer:
@@ -62,118 +62,33 @@ class TrendAnalyzer:
         self.model_name = model_name
         self.client = ollama_client
 
-    def analyze_and_hypothesize(self, abstracts: List[dict], topic: str) -> TrendAnalysisResult:
+    def analyze_and_hypothesize(self, abstracts: List[dict], topic: str, 
+                                 prompt_options: dict = None) -> TrendAnalysisResult:
         if not abstracts:
             return TrendAnalysisResult(
                 landscape_summary="No data provided.",
                 identified_gaps=[],
                 hypotheses=[]
             )
+        
+        # Default options
+        options = prompt_options or {
+            'num_hypotheses': 3,
+            'include_tte': True,
+            'include_bias': True,
+            'include_feasibility': True,
+            'focus_areas': ["Comparator Gaps", "Population Gaps"]
+        }
 
         context_text = ""
         for i, paper in enumerate(abstracts):
             context_text += f"[{i+1}] Title: {paper['title']}\nAbstract: {paper['abstract']}\n\n"
-
-        prompt = f"""
-You are a Principal Pharmacoepidemiologist with expertise in Causal Inference and Target Trial Emulation using administrative claims data (e.g., Medicare, NHIS-HEALS) and EMR.
-
-**TOPIC**: {topic}
-
-**YOUR TASK**: Analyze the provided abstracts to generate scientifically rigorous, RWD-feasible research hypotheses.
-
----
-## STEP 1: LANDSCAPE ANALYSIS
-Identify:
-- Drug classes/interventions studied.
-- Outcomes measured (Distinguish between clinical endpoints vs. surrogate markers).
-- Study designs (Note any "Target Trial Emulation" attempts).
-- Key limitations mentioned in abstracts (e.g., residual confounding, small sample size).
-
-## STEP 2: GAP & FEASIBILITY IDENTIFICATION
-Categorize gaps into:
-1. **Comparator Gaps**: Lack of active comparator designs (avoid placebo comparisons).
-2. **Population Gaps**: Subgroups like elderly (≥75), renal impairment, or specific comorbidities.
-3. **Outcome Gaps**: Hard endpoints (hospitalization, mortality) vs. symptoms.
-4. **Temporal Gaps**: Long-term safety (>5 years) or latency issues.
-
-**CRITICAL FEASIBILITY FILTER**:
-For every gap identified, ask: "Can this be studied in Claims/EMR?"
-- ❌ DISCARD outcomes relying on subjective scores (e.g., pain scale, depression score) unless strictly coded.
-- ✅ PRIORITIZE outcomes defined by ICD-10, Procedure codes, or Death registries.
-
-## STEP 3: NOVELTY & VALIDITY CHECK
-- ⚠️ Check: Is this ALREADY answered?
-- ⚠️ Check: Is the "New User" design applicable? (Prevalent user bias risk).
-- ⚠️ Check: Is there Clinical Equipoise between comparison groups?
-
-## STEP 4: HYPOTHESIS GENERATION (Target Trial Emulation Framework)
-Propose exactly 3 hypotheses. Focus on "Active Comparator New User Design".
-
-Structure for each:
-- **Title**: Academic format.
-- **Research Question**: PICO format.
-- **Rationale**: Cite specific gaps. Why is RWD better than RCT here?
-- **TTE Components (Target Trial Emulation)**:
-  * **Eligibility Criteria**: Inclusion/Exclusion (must be code-able).
-  * **Treatment Strategies**: Index drug vs. Active Comparator (Must be same indication/severity level).
-  * **Assignment**: Mimic randomization at index date (washout period required).
-  * **Follow-up**: "Intention-to-treat" vs "Per-protocol" (As-treated) definition.
-  * **Outcome**: Operational definition (e.g., "Primary diagnosis of [Code] in inpatient setting").
-  * **Time Zero**: Index date definition.
-  * **Causal Contrast**: Hazard Ratio / Risk Difference.
-- **Bias Mitigation**:
-  * **Confounding**: List key covariates for PS matching/IPTW.
-  * **Falsification**: Suggest a "Negative Control Outcome" to check for unmeasured confounding.
-  * **Sensitivity**: E-value or quantitative bias analysis approach.
-- **Feasibility**: Data source suitability, sample size estimate, key challenges.
-
----
-**OUTPUT FORMAT** (Strict JSON):
-{{
-    "landscape_summary": "Summary text describing current research landscape...",
-    "identified_gaps": [
-        {{
-            "gap": "Specific description of evidence gap",
-            "category": "Comparator/Population/Outcome/Temporal",
-            "feasibility_status": "High/Medium/Low (with reason)"
-        }}
-    ],
-    "hypotheses": [
-        {{
-            "title": "Publication-ready academic title",
-            "research_question": "PICO format question",
-            "rationale": "Why this study is needed now",
-            "study_design": "Active Comparator New User Design",
-            "target_trial_components": {{
-                "population": "Code-able eligibility criteria",
-                "intervention": "Index drug definition",
-                "comparator": "Active comparator with equipoise justification",
-                "outcome_operational_def": "Specific definition with codes",
-                "follow_up": "Start/End/Censoring definition",
-                "time_zero_definition": "Index date definition"
-            }},
-            "bias_mitigation": {{
-                "key_confounders": ["Confounder 1", "Confounder 2", "..."],
-                "negative_control_outcome": "Suggested falsification outcome",
-                "sensitivity_analysis": "E-value or QBA approach"
-            }},
-            "feasibility_assessment": {{
-                "data_source_suitability": "Why Claims/EMR fits",
-                "potential_challenges": "Key limitations",
-                "expected_sample_size": "Low/Medium/High"
-            }}
-        }}
-    ]
-}}
-
-**ABSTRACTS TO ANALYZE**:
-{context_text}
-
-Think step by step. Ensure final output is ONLY valid JSON matching the exact structure above.
-"""
+        
+        # Build dynamic prompt
+        prompt = self._build_prompt(topic, context_text, options)
         
         try:
-            print(f"DEBUG: Sending TTE-based request to Ollama ({self.model_name})...")
+            print(f"DEBUG: Sending request to Ollama ({self.model_name})...")
             
             chat_func = self.client.chat if self.client else ollama.chat
             
@@ -185,9 +100,7 @@ Think step by step. Ensure final output is ONLY valid JSON matching the exact st
             )
             
             content = response['message']['content']
-            print("DEBUG: Raw LLM Output start ---")
-            print(content[:500])
-            print("DEBUG: Raw LLM Output end ---")
+            print("DEBUG: Raw LLM Output received")
             
             # Sanitize markdown code blocks
             content = content.strip()
@@ -203,10 +116,10 @@ Think step by step. Ensure final output is ONLY valid JSON matching the exact st
             try:
                 data = json.loads(content)
             except json.JSONDecodeError:
-                raise ValueError(f"LLM did not return valid JSON. Content: {content[:200]}...")
+                raise ValueError(f"LLM did not return valid JSON.")
 
             # Normalize and validate
-            normalized_data = self._normalize_response(data)
+            normalized_data = self._normalize_response(data, options)
             
             return TrendAnalysisResult.model_validate(normalized_data)
             
@@ -217,11 +130,151 @@ Think step by step. Ensure final output is ONLY valid JSON matching the exact st
                 identified_gaps=[],
                 hypotheses=[]
             )
+    
+    def _build_prompt(self, topic: str, context_text: str, options: dict) -> str:
+        """Build dynamic prompt based on user options."""
+        
+        num_hyp = options.get('num_hypotheses', 3)
+        include_tte = options.get('include_tte', True)
+        include_bias = options.get('include_bias', True)
+        include_feasibility = options.get('include_feasibility', True)
+        focus_areas = options.get('focus_areas', ["Comparator Gaps", "Population Gaps"])
+        
+        # Focus areas text
+        focus_text = "\n".join([f"- {area}" for area in focus_areas]) if focus_areas else "- All gap types"
+        
+        # Base prompt
+        prompt = f"""
+You are a Principal Pharmacoepidemiologist with expertise in Causal Inference and Target Trial Emulation using administrative claims data (e.g., Medicare, NHIS-HEALS) and EMR.
 
-    def _normalize_response(self, data: dict) -> dict:
+**TOPIC**: {topic}
+
+**YOUR TASK**: Analyze the provided abstracts to generate scientifically rigorous, RWD-feasible research hypotheses.
+
+---
+## STEP 1: LANDSCAPE ANALYSIS
+Identify:
+- Drug classes/interventions studied.
+- Outcomes measured (Distinguish between clinical endpoints vs. surrogate markers).
+- Study designs (Note any "Target Trial Emulation" attempts).
+- Key limitations mentioned in abstracts.
+
+## STEP 2: GAP & FEASIBILITY IDENTIFICATION
+**FOCUS ON THESE GAP TYPES**:
+{focus_text}
+
+**CRITICAL FEASIBILITY FILTER**:
+- ❌ DISCARD outcomes relying on subjective scores (e.g., pain scale) unless strictly coded.
+- ✅ PRIORITIZE outcomes defined by ICD-10, Procedure codes, or Death registries.
+
+## STEP 3: NOVELTY & VALIDITY CHECK
+- ⚠️ Check: Is this ALREADY answered?
+- ⚠️ Check: Is "New User" design applicable?
+- ⚠️ Check: Is there Clinical Equipoise?
+
+## STEP 4: HYPOTHESIS GENERATION
+Propose exactly {num_hyp} hypotheses. Focus on "Active Comparator New User Design".
+"""
+        
+        # Add TTE section if enabled
+        if include_tte:
+            prompt += """
+**TTE Components Required**:
+- Eligibility Criteria (code-able)
+- Treatment Strategies (Index vs Active Comparator)
+- Assignment (mimic randomization)
+- Follow-up (ITT vs Per-protocol)
+- Outcome (operational definition)
+- Time Zero (index date)
+"""
+        
+        # Add Bias section if enabled
+        if include_bias:
+            prompt += """
+**Bias Mitigation Required**:
+- Key Confounders for PS matching/IPTW
+- Negative Control Outcome (falsification test)
+- Sensitivity Analysis (E-value or QBA)
+"""
+        
+        # Add Feasibility section if enabled
+        if include_feasibility:
+            prompt += """
+**Feasibility Required**:
+- Data source suitability
+- Expected sample size (Low/Medium/High)
+- Potential challenges
+"""
+        
+        # JSON output format
+        prompt += f"""
+---
+**OUTPUT FORMAT** (Strict JSON):
+{{
+    "landscape_summary": "Summary text...",
+    "identified_gaps": [
+        {{
+            "gap": "Description",
+            "category": "Comparator/Population/Outcome/Temporal",
+            "feasibility_status": "High/Medium/Low (Reason)"
+        }}
+    ],
+    "hypotheses": [
+        {{
+            "title": "Publication-ready title",
+            "research_question": "PICO format",
+            "rationale": "Why needed",
+            "study_design": "Active Comparator New User Design","""
+        
+        if include_tte:
+            prompt += """
+            "target_trial_components": {
+                "population": "Eligibility criteria",
+                "intervention": "Index drug",
+                "comparator": "Active comparator",
+                "outcome_operational_def": "ICD/procedure codes",
+                "follow_up": "Duration/censoring",
+                "time_zero_definition": "Index date"
+            },"""
+        
+        if include_bias:
+            prompt += """
+            "bias_mitigation": {
+                "key_confounders": ["List of confounders"],
+                "negative_control_outcome": "Falsification outcome",
+                "sensitivity_analysis": "E-value approach"
+            },"""
+        
+        if include_feasibility:
+            prompt += """
+            "feasibility_assessment": {
+                "data_source_suitability": "Why fits",
+                "potential_challenges": "Limitations",
+                "expected_sample_size": "Low/Medium/High"
+            }"""
+        
+        prompt += f"""
+        }}
+    ]
+}}
+
+**ABSTRACTS TO ANALYZE**:
+{context_text}
+
+Think step by step. Ensure final output is ONLY valid JSON.
+"""
+        return prompt
+
+    def _normalize_response(self, data: dict, options: dict) -> dict:
         """Normalize LLM response to match expected structure."""
         
+        include_tte = options.get('include_tte', True)
+        include_bias = options.get('include_bias', True)
+        include_feasibility = options.get('include_feasibility', True)
+        
         def find_value(targets: List[str], source: dict):
+            if not source:
+                return None
             source_map = {k.lower().replace("_", "").replace(" ", ""): v for k, v in source.items()}
             for target in targets:
                 target_clean = target.lower().replace("_", "")
@@ -239,7 +292,7 @@ Think step by step. Ensure final output is ONLY valid JSON matching the exact st
         normalized = {}
         
         # 1. Landscape Summary
-        val = find_value(["landscape_summary", "trend_summary", "summary", "current_landscape"], data)
+        val = find_value(["landscape_summary", "trend_summary", "summary"], data)
         normalized["landscape_summary"] = ensure_string(val) or "Landscape summary not generated."
         
         # 2. Identified Gaps
@@ -265,54 +318,69 @@ Think step by step. Ensure final output is ONLY valid JSON matching the exact st
             normalized["identified_gaps"] = [{"gap": "No gaps identified", "category": "General", "feasibility_status": "N/A"}]
         
         # 3. Hypotheses
-        hyp_val = find_value(["hypotheses", "proposed_hypotheses", "research_hypotheses"], data)
+        hyp_val = find_value(["hypotheses", "proposed_hypotheses"], data)
         normalized["hypotheses"] = []
         
         if hyp_val and isinstance(hyp_val, list):
-            for hyp_item in hyp_val[:3]:  # Max 3
+            for hyp_item in hyp_val:
                 if isinstance(hyp_item, dict):
-                    # Target Trial Components
-                    ttc_raw = find_value(["target_trial_components", "tte_components", "trial_components"], hyp_item) or {}
-                    ttc = {
-                        "population": ensure_string(find_value(["population", "eligibility", "inclusion"], ttc_raw)) or "Not specified",
-                        "intervention": ensure_string(find_value(["intervention", "treatment", "exposure"], ttc_raw)) or "Not specified",
-                        "comparator": ensure_string(find_value(["comparator", "control"], ttc_raw)) or "Not specified",
-                        "outcome_operational_def": ensure_string(find_value(["outcome_operational_def", "outcome", "primary_outcome"], ttc_raw)) or "Not specified",
-                        "follow_up": ensure_string(find_value(["follow_up", "followup", "follow_up_period"], ttc_raw)) or "Not specified",
-                        "time_zero_definition": ensure_string(find_value(["time_zero_definition", "time_zero", "index_date"], ttc_raw)) or "Date of first prescription"
+                    hyp_data = {
+                        "title": ensure_string(find_value(["title"], hyp_item)) or "Untitled",
+                        "research_question": ensure_string(find_value(["research_question", "pico"], hyp_item)) or "N/A",
+                        "rationale": ensure_string(find_value(["rationale"], hyp_item)) or "N/A",
+                        "study_design": ensure_string(find_value(["study_design"], hyp_item)) or "Active Comparator New User Design",
                     }
+                    
+                    # TTE Components
+                    if include_tte:
+                        ttc_raw = find_value(["target_trial_components"], hyp_item) or {}
+                        hyp_data["target_trial_components"] = {
+                            "population": ensure_string(find_value(["population"], ttc_raw)) or "Not specified",
+                            "intervention": ensure_string(find_value(["intervention"], ttc_raw)) or "Not specified",
+                            "comparator": ensure_string(find_value(["comparator"], ttc_raw)) or "Not specified",
+                            "outcome_operational_def": ensure_string(find_value(["outcome_operational_def", "outcome"], ttc_raw)) or "Not specified",
+                            "follow_up": ensure_string(find_value(["follow_up"], ttc_raw)) or "Not specified",
+                            "time_zero_definition": ensure_string(find_value(["time_zero_definition"], ttc_raw)) or "Date of first prescription"
+                        }
+                    else:
+                        hyp_data["target_trial_components"] = {
+                            "population": "N/A", "intervention": "N/A", "comparator": "N/A",
+                            "outcome_operational_def": "N/A", "follow_up": "N/A", "time_zero_definition": "N/A"
+                        }
                     
                     # Bias Mitigation
-                    bm_raw = find_value(["bias_mitigation", "bias", "confounding_control"], hyp_item) or {}
-                    confounders = find_value(["key_confounders", "confounders", "covariates"], bm_raw)
-                    if isinstance(confounders, str):
-                        confounders = [confounders]
-                    elif not isinstance(confounders, list):
-                        confounders = ["Age", "Sex", "Comorbidities"]
-                    
-                    bm = {
-                        "key_confounders": confounders,
-                        "negative_control_outcome": ensure_string(find_value(["negative_control_outcome", "falsification", "negative_control"], bm_raw)) or "Ingrown toenail or similar",
-                        "sensitivity_analysis": ensure_string(find_value(["sensitivity_analysis", "sensitivity", "e_value"], bm_raw)) or "E-value calculation"
-                    }
+                    if include_bias:
+                        bm_raw = find_value(["bias_mitigation"], hyp_item) or {}
+                        confounders = find_value(["key_confounders"], bm_raw)
+                        if isinstance(confounders, str):
+                            confounders = [confounders]
+                        elif not isinstance(confounders, list):
+                            confounders = ["Age", "Sex", "Comorbidities"]
+                        
+                        hyp_data["bias_mitigation"] = {
+                            "key_confounders": confounders,
+                            "negative_control_outcome": ensure_string(find_value(["negative_control_outcome"], bm_raw)) or "N/A",
+                            "sensitivity_analysis": ensure_string(find_value(["sensitivity_analysis"], bm_raw)) or "E-value"
+                        }
+                    else:
+                        hyp_data["bias_mitigation"] = {
+                            "key_confounders": [], "negative_control_outcome": "N/A", "sensitivity_analysis": "N/A"
+                        }
                     
                     # Feasibility
-                    fa_raw = find_value(["feasibility_assessment", "feasibility"], hyp_item) or {}
-                    fa = {
-                        "data_source_suitability": ensure_string(find_value(["data_source_suitability", "data_source", "suitability"], fa_raw)) or "Claims data appropriate",
-                        "potential_challenges": ensure_string(find_value(["potential_challenges", "challenges", "limitations"], fa_raw)) or "Standard RWD limitations apply",
-                        "expected_sample_size": ensure_string(find_value(["expected_sample_size", "sample_size"], fa_raw)) or "Medium"
-                    }
+                    if include_feasibility:
+                        fa_raw = find_value(["feasibility_assessment"], hyp_item) or {}
+                        hyp_data["feasibility_assessment"] = {
+                            "data_source_suitability": ensure_string(find_value(["data_source_suitability"], fa_raw)) or "N/A",
+                            "potential_challenges": ensure_string(find_value(["potential_challenges"], fa_raw)) or "N/A",
+                            "expected_sample_size": ensure_string(find_value(["expected_sample_size"], fa_raw)) or "Medium"
+                        }
+                    else:
+                        hyp_data["feasibility_assessment"] = {
+                            "data_source_suitability": "N/A", "potential_challenges": "N/A", "expected_sample_size": "N/A"
+                        }
                     
-                    normalized["hypotheses"].append({
-                        "title": ensure_string(find_value(["title", "hypothesis_title"], hyp_item)) or "Untitled Hypothesis",
-                        "research_question": ensure_string(find_value(["research_question", "pico", "question"], hyp_item)) or "Research question not specified",
-                        "rationale": ensure_string(find_value(["rationale", "justification", "background"], hyp_item)) or "Rationale not provided",
-                        "study_design": ensure_string(find_value(["study_design", "design"], hyp_item)) or "Active Comparator New User Design",
-                        "target_trial_components": ttc,
-                        "bias_mitigation": bm,
-                        "feasibility_assessment": fa
-                    })
+                    normalized["hypotheses"].append(hyp_data)
         
         if not normalized["hypotheses"]:
             normalized["hypotheses"] = [{
